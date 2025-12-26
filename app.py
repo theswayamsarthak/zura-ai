@@ -327,7 +327,7 @@ elif st.session_state["authentication_status"] is True:
                     if show_debug:
                         st.write("🔍 Running Debug Segmentation...")
                         raw_debug = run_segmentation(image)
-                        st.image(raw_debug * 255, caption="AI Raw Mask", use_container_width=True)
+                        st.image(raw_debug * 255, caption="AI Raw Mask", use_column_width=True)
                         status.update(label="Debug Complete", state="complete")
                         st.stop()
                     
@@ -361,8 +361,8 @@ elif st.session_state["authentication_status"] is True:
 
                 # Display Results
                 c1, c2 = st.columns(2)
-                with c1: st.image(image, caption="Satellite View", use_container_width=True)
-                with c2: st.image(final_vis, caption="AI Detected Roof (Isolated)", use_container_width=True)
+                with c1: st.image(image, caption="Satellite View", use_column_width=True)
+                with c2: st.image(final_vis, caption="AI Detected Roof (Isolated)", use_column_width=True)
                 
                 st.markdown("### 📊 Project Feasibility Report")
                 m1, m2, m3, m4 = st.columns(4)
@@ -533,4 +533,5 @@ elif st.session_state["authentication_status"] is True:
     <div class="footer">
         --- AI: <b>SegFormer</b> ---  | ---  Data: <b>NASA POWER</b> ---  | ---  Manual: <b>Canvas</b> ---  | ---  © 2026 Zura.ai ---
     </div>
+
     """, unsafe_allow_html=True)
