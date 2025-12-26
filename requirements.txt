@@ -1,0 +1,11 @@
+streamlit
+st-supabase-connection
+supabase
+pandas
+numpy
+opencv-python-headless
+Pillow
+transformers
+torch
+streamlit-drawable-canvas
+bcrypt
