@@ -8,4 +8,5 @@ Pillow
 transformers
 torch
 streamlit-drawable-canvas
+matplotlib
 bcrypt
