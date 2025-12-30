@@ -6,6 +6,8 @@
 
 A production-ready web application that leverages computer vision and deep learning to automatically detect rooftop structures, identify existing solar panel installations, and estimate solar energy generation potential from satellite imagery.
 
+This is part of an application developed for Guna Solar Pvt. Ltd., Chennai, India
+
 ---
 
 ## Overview
@@ -262,8 +264,8 @@ usable_area = total_roof_area - panel_area
 ```python
 # Capacity factors (m²/kWp) by roof type
 capacity_factors = {
-    "RCC": 7.0,
-    "Metal": 7.5,
+    "RCC": 8.0,
+    "Metal": 7.2,
     "Other": 8.0
 }
 
@@ -411,8 +413,8 @@ All sensitive credentials stored in `.streamlit/secrets.toml` (gitignored)
 | `ZOOM_LEVEL` | 19 | Google Maps zoom (higher = more detail) |
 | `IMG_SIZE` | 512 | Image dimensions (pixels) |
 | `PERFORMANCE_RATIO` | 0.75 | System efficiency factor |
-| `CAPACITY_FACTOR_RCC` | 7.0 | Area per kWp for concrete roofs |
-| `CAPACITY_FACTOR_METAL` | 7.5 | Area per kWp for metal roofs |
+| `CAPACITY_FACTOR_RCC` | 8.0 | Area per kWp for concrete roofs |
+| `CAPACITY_FACTOR_METAL` | 7.2 | Area per kWp for metal sheet roofs |
 | `CAPACITY_FACTOR_OTHER` | 8.0 | Area per kWp for general roofs |
 | `PANEL_OVERLAP_THRESHOLD` | 0.3 | Min overlap with roof to validate panel |
 | `MIN_CONTOUR_AREA` | 200 | Min pixels to consider building contour |
@@ -427,19 +429,6 @@ All sensitive credentials stored in `.streamlit/secrets.toml` (gitignored)
 4. **Shadowing**: No shade analysis (trees, adjacent buildings)
 5. **Panel Orientation**: Assumes optimal tilt angles
 6. **Inverter Losses**: Not modeled separately (included in performance ratio)
-
----
-
-## Roadmap
-
-- [ ] Time-series solar generation forecasting
-- [ ] 3D roof modeling from LiDAR data
-- [ ] Shade analysis using building height maps
-- [ ] Financial ROI calculator with utility rate integration
-- [ ] Multi-language support
-- [ ] Mobile-responsive UI
-- [ ] Batch processing for commercial portfolios
-- [ ] REST API for third-party integrations
 
 ---
 
@@ -471,10 +460,10 @@ If you use this platform in research, please cite:
 
 ```bibtex
 @software{zura_ai_2025,
-  author = {Your Name},
+  author = {Swayam Sarthak},
   title = {Zura.ai: AI-Powered Solar Rooftop Analysis Platform},
-  year = {2025},
-  url = {https://github.com/yourusername/zura-ai}
+  year = {2026},
+  url = {https://github.com/theswayamsarthak/zura-ai}
 }
 ```
 
@@ -486,15 +475,6 @@ If you use this platform in research, please cite:
 - **YOLOv8 Solar Weights**: [finloop](https://huggingface.co/finloop)
 - **Solar Data**: NASA POWER Project
 - **Geospatial APIs**: Google Cloud Platform
+- **Guna Solar Pvt. Ltd.**: Application as an AI Engineer Intern
 
 ---
-
-## Support
-
-For issues, questions, or feature requests:
-- **GitHub Issues**: [Submit Issue](https://github.com/yourusername/zura-ai/issues)
-- **Email**: your.email@example.com
-
----
-
-**Built with ❤️ for the solar energy transition**
