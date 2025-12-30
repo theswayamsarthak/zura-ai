@@ -10,4 +10,4 @@ torch
 streamlit-drawable-canvas
 matplotlib
 bcrypt
-
+ultralytics
