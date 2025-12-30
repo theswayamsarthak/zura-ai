@@ -126,6 +126,11 @@ if st.session_state["authentication_status"] is not True:
 # 3. MAIN APPLICATION (Only if Logged In)
 # ==========================================
 elif st.session_state["authentication_status"] is True:
+    if "models_loaded" not in st.session_state:
+        with st.spinner("🚀 Booting up AI Engines (SegFormer + YOLO)..."):
+            load_roof_model()
+            load_panel_model()
+            st.session_state["models_loaded"] = True
 
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
@@ -659,3 +664,4 @@ elif st.session_state["authentication_status"] is True:
     </div>
 
     """, unsafe_allow_html=True)
+
