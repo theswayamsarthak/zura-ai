@@ -28,6 +28,13 @@ from ultralytics import YOLO
 # ==========================================
 st.set_page_config(page_title="Zura.ai", layout="wide", page_icon="favicon.ico")
 
+# --- GLOBAL CONSTANTS ---
+ROOF_MODEL_NAME = "wu-pr-gw/segformer-b2-finetuned-with-LoveDA"
+ZOOM_LEVEL = 19
+IMG_SIZE = 512
+PERFORMANCE_RATIO = 0.75
+DEVICE = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+
 try:
     conn = st.connection(
         "supabase",
@@ -40,12 +47,184 @@ except Exception as e:
     st.stop()
 
 # ==========================================
-# 2. AUTHENTICATION LOGIC (SUPABASE)
+# 2. HELPER FUNCTIONS & MODEL LOADING
+# ==========================================
+
+@st.cache_resource
+def load_roof_model():
+    processor = SegformerImageProcessor.from_pretrained(ROOF_MODEL_NAME)
+    model = SegformerForSemanticSegmentation.from_pretrained(ROOF_MODEL_NAME).to(DEVICE)
+    return processor, model
+
+@st.cache_resource
+def load_panel_model():
+    model_filename = "solar_yolo.pt"
+    model_url = "https://huggingface.co/finloop/yolov8s-seg-solar-panels/resolve/main/best.pt?download=true"
+
+    if not os.path.exists(model_filename):
+        with st.spinner("Downloading Solar Panel AI Model (First Run Only)..."):
+            try:
+                response = requests.get(model_url, stream=True)
+                if response.status_code == 200:
+                    with open(model_filename, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=1024):
+                            f.write(chunk)
+                    st.success("Model downloaded successfully!")
+                else:
+                    st.warning("Could not download specialized weights. Falling back to standard YOLO.")
+                    return YOLO("yolov8n-seg.pt")
+            except Exception as e:
+                st.warning(f"Download failed: {e}. Using standard YOLO.")
+                return YOLO("yolov8n-seg.pt")
+
+    try:
+        return YOLO(model_filename)
+    except:
+        return YOLO("yolov8n-seg.pt")
+
+# Initialize Roof Model Globally
+roof_processor, roof_model = load_roof_model()
+
+def get_lat_lon_from_google(query, api_key):
+    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+    params = {"query": query, "key": api_key}
+    try:
+        response = requests.get(url, params=params)
+        data = response.json()
+        if data.get("status") == "OK" and data.get("results"):
+            top_result = data["results"][0]
+            name = top_result.get("name")
+            addr = top_result.get("formatted_address")
+            loc = top_result["geometry"]["location"]
+            return loc["lat"], loc["lng"], f"{name}, {addr}"
+        return None, None, None
+    except: return None, None, None
+
+def fetch_satellite_image(lat, lon, api_key):
+    url = "https://maps.googleapis.com/maps/api/staticmap"
+    params = {"center": f"{lat},{lon}", "zoom": ZOOM_LEVEL, "size": f"{IMG_SIZE}x{IMG_SIZE}", "maptype": "satellite", "key": api_key}
+    try:
+        resp = requests.get(url, params=params)
+        if resp.status_code == 200:
+            return Image.open(io.BytesIO(resp.content)).convert("RGB")
+        return None
+    except: return None
+
+def fetch_nasa_solar_data(lat, lon):
+    try:
+        url = "https://power.larc.nasa.gov/api/temporal/climatology/point"
+        params = {"parameters": "ALLSKY_SFC_SW_DWN", "community": "RE", "longitude": lon, "latitude": lat, "format": "JSON"}
+        resp = requests.get(url, params=params, timeout=5)
+        return resp.json()['properties']['parameter']['ALLSKY_SFC_SW_DWN']['ANN']
+    except: return 4.5
+
+def run_segmentation(image):
+    open_cv_image = np.array(image)
+    lab = cv2.cvtColor(open_cv_image, cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+    cl = clahe.apply(l)
+    limg = cv2.merge((cl, a, b))
+    final_image_cv = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
+    enhanced_image = Image.fromarray(final_image_cv)
+
+    inputs = roof_processor(images=enhanced_image, return_tensors="pt").to(DEVICE)
+    with torch.no_grad():
+        outputs = roof_model(**inputs)
+
+    logits = torch.nn.functional.interpolate(outputs.logits, size=image.size[::-1], mode="bilinear", align_corners=False)
+    predicted_class_map = logits.argmax(dim=1)[0].cpu().numpy().astype(np.uint8)
+
+    raw_mask = (predicted_class_map == 2).astype(np.uint8)
+    return raw_mask
+
+def clean_mask(mask):
+    kernel = np.ones((3,3), np.uint8)
+    closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    dilated = cv2.dilate(closed, kernel, iterations=1)
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        return np.zeros_like(mask)
+
+    h, w = mask.shape
+    center_pt = (w // 2, h // 2)
+    best_cnt = None
+    max_proximity = -float('inf')
+
+    for cnt in contours:
+        if cv2.contourArea(cnt) < 200: continue
+        proximity = cv2.pointPolygonTest(cnt, center_pt, True)
+        if proximity > max_proximity:
+            max_proximity = proximity
+            best_cnt = cnt
+
+    final_mask = np.zeros_like(mask)
+    if best_cnt is not None:
+        epsilon = 0.002 * cv2.arcLength(best_cnt, True)
+        approx = cv2.approxPolyDP(best_cnt, epsilon, True)
+        cv2.drawContours(final_mask, [approx], -1, 1, thickness=cv2.FILLED)
+
+    return final_mask
+
+def calculate_new_center(lat, lon, mask, zoom=19, img_size=512):
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return lat, lon
+
+    largest_cnt = max(contours, key=cv2.contourArea)
+    M = cv2.moments(largest_cnt)
+    if M["m00"] == 0:
+        return lat, lon
+
+    cX = int(M["m10"] / M["m00"])
+    cY = int(M["m01"] / M["m00"])
+
+    center_x, center_y = img_size // 2, img_size // 2
+    dx_px = cX - center_x
+    dy_px = cY - center_y 
+
+    meters_per_px = 156543.03392 * math.cos(math.radians(lat)) / (2 ** zoom)
+    shift_x_meters = dx_px * meters_per_px
+    shift_y_meters = -dy_px * meters_per_px
+
+    new_lat = lat + (shift_y_meters / 111320.0)
+    new_lon = lon + (shift_x_meters / (40075000.0 * math.cos(math.radians(lat)) / 360.0))
+
+    return new_lat, new_lon
+
+def detect_existing_panels(image, roof_mask):
+    model = load_panel_model()
+    img_cv = np.array(image)
+    results = model.predict(img_cv, conf=0.15, verbose=False)
+    final_panel_mask = np.zeros_like(roof_mask)
+    total_panel_pixel_area = 0
+
+    if results[0].masks is not None:
+        masks = results[0].masks.data.cpu().numpy()
+
+        for mask in masks:
+            mask_resized = cv2.resize(mask, (img_cv.shape[1], img_cv.shape[0]))
+            mask_binary = (mask_resized > 0.5).astype(np.uint8) 
+
+            overlap = cv2.bitwise_and(mask_binary, mask_binary, mask=roof_mask)
+
+            overlap_area = cv2.countNonZero(overlap)
+            panel_area = cv2.countNonZero(mask_binary)
+
+            if panel_area > 0 and (overlap_area / panel_area) > 0.3:
+                final_panel_mask = cv2.bitwise_or(final_panel_mask, overlap)
+                total_panel_pixel_area += overlap_area
+
+    return final_panel_mask, total_panel_pixel_area
+
+
+# ==========================================
+# 3. AUTHENTICATION LOGIC
 # ==========================================
 
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
 
 def check_password(password, hashed):
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
@@ -56,7 +235,6 @@ if "name" not in st.session_state:
     st.session_state["name"] = None
 if "username" not in st.session_state:
     st.session_state["username"] = None
-
 
 def logout():
     st.session_state["authentication_status"] = None
@@ -123,202 +301,26 @@ if st.session_state["authentication_status"] is not True:
                 st.warning("Please fill all fields.")
 
 # ==========================================
-# 3. MAIN APPLICATION (Only if Logged In)
+# 4. MAIN APPLICATION (Only if Logged In)
 # ==========================================
 elif st.session_state["authentication_status"] is True:
+
+    # --- PRE-LOAD MODELS ---
     if "models_loaded" not in st.session_state:
         with st.spinner("🚀 Booting up AI Engines (SegFormer + YOLO)..."):
             load_roof_model()
             load_panel_model()
             st.session_state["models_loaded"] = True
 
+    # --- API KEY ---
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
     else:
         api_key = ""
 
-    ROOF_MODEL_NAME = "wu-pr-gw/segformer-b2-finetuned-with-LoveDA"
-    ZOOM_LEVEL = 19
-    IMG_SIZE = 512
-    PERFORMANCE_RATIO = 0.75
-    DEVICE = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-
-    def get_lat_lon_from_google(query, api_key):
-        url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-        params = {"query": query, "key": api_key}
-        try:
-            response = requests.get(url, params=params)
-            data = response.json()
-            if data.get("status") == "OK" and data.get("results"):
-                top_result = data["results"][0]
-                name = top_result.get("name")
-                addr = top_result.get("formatted_address")
-                loc = top_result["geometry"]["location"]
-                return loc["lat"], loc["lng"], f"{name}, {addr}"
-            return None, None, None
-        except: return None, None, None
-
-    def fetch_satellite_image(lat, lon, api_key):
-        url = "https://maps.googleapis.com/maps/api/staticmap"
-        params = {"center": f"{lat},{lon}", "zoom": ZOOM_LEVEL, "size": f"{IMG_SIZE}x{IMG_SIZE}", "maptype": "satellite", "key": api_key}
-        try:
-            resp = requests.get(url, params=params)
-            if resp.status_code == 200:
-                return Image.open(io.BytesIO(resp.content)).convert("RGB")
-            return None
-        except: return None
-
-    def fetch_nasa_solar_data(lat, lon):
-        try:
-            url = "https://power.larc.nasa.gov/api/temporal/climatology/point"
-            params = {"parameters": "ALLSKY_SFC_SW_DWN", "community": "RE", "longitude": lon, "latitude": lat, "format": "JSON"}
-            resp = requests.get(url, params=params, timeout=5)
-            return resp.json()['properties']['parameter']['ALLSKY_SFC_SW_DWN']['ANN']
-        except: return 4.5
-
-    @st.cache_resource
-    def load_roof_model():
-        processor = SegformerImageProcessor.from_pretrained(ROOF_MODEL_NAME)
-        model = SegformerForSemanticSegmentation.from_pretrained(ROOF_MODEL_NAME).to(DEVICE)
-        return processor, model
-
-    @st.cache_resource
-    def load_panel_model():
-        model_filename = "solar_yolo.pt"
-        model_url = "https://huggingface.co/finloop/yolov8s-seg-solar-panels/resolve/main/best.pt?download=true"
-
-        if not os.path.exists(model_filename):
-            with st.spinner("Downloading Solar Panel AI Model (First Run Only)..."):
-                try:
-                    response = requests.get(model_url, stream=True)
-                    if response.status_code == 200:
-                        with open(model_filename, 'wb') as f:
-                            for chunk in response.iter_content(chunk_size=1024):
-                                f.write(chunk)
-                        st.success("Model downloaded successfully!")
-                    else:
-                        st.warning("Could not download specialized weights. Falling back to standard YOLO.")
-                        return YOLO("yolov8n-seg.pt")
-                except Exception as e:
-                    st.warning(f"Download failed: {e}. Using standard YOLO.")
-                    return YOLO("yolov8n-seg.pt")
-
-        try:
-            return YOLO(model_filename)
-        except:
-            return YOLO("yolov8n-seg.pt")
-
-    roof_processor, roof_model = load_roof_model()
-
-    def run_segmentation(image):
-        open_cv_image = np.array(image)
-        lab = cv2.cvtColor(open_cv_image, cv2.COLOR_RGB2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-        cl = clahe.apply(l)
-        limg = cv2.merge((cl, a, b))
-        final_image_cv = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
-        enhanced_image = Image.fromarray(final_image_cv)
-
-        inputs = roof_processor(images=enhanced_image, return_tensors="pt").to(DEVICE)
-        with torch.no_grad():
-            outputs = roof_model(**inputs)
-
-        logits = torch.nn.functional.interpolate(outputs.logits, size=image.size[::-1], mode="bilinear", align_corners=False)
-        predicted_class_map = logits.argmax(dim=1)[0].cpu().numpy().astype(np.uint8)
-
-        raw_mask = (predicted_class_map == 2).astype(np.uint8)
-        return raw_mask
-
-    def clean_mask(mask):
-        kernel = np.ones((3,3), np.uint8)
-        closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-        dilated = cv2.dilate(closed, kernel, iterations=1)
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        if not contours:
-            return np.zeros_like(mask)
-
-        h, w = mask.shape
-        center_pt = (w // 2, h // 2)
-        best_cnt = None
-        max_proximity = -float('inf')
-
-        for cnt in contours:
-            if cv2.contourArea(cnt) < 200: continue
-            proximity = cv2.pointPolygonTest(cnt, center_pt, True)
-            if proximity > max_proximity:
-                max_proximity = proximity
-                best_cnt = cnt
-
-        final_mask = np.zeros_like(mask)
-        if best_cnt is not None:
-            epsilon = 0.002 * cv2.arcLength(best_cnt, True)
-            approx = cv2.approxPolyDP(best_cnt, epsilon, True)
-            cv2.drawContours(final_mask, [approx], -1, 1, thickness=cv2.FILLED)
-
-        return final_mask
-
-    # ==========================================
-    # NEW FUNCTIONS: RECENTERING & PANEL DETECTION
-    # ==========================================
-
-    def calculate_new_center(lat, lon, mask, zoom=19, img_size=512):
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return lat, lon
-
-        largest_cnt = max(contours, key=cv2.contourArea)
-        M = cv2.moments(largest_cnt)
-        if M["m00"] == 0:
-            return lat, lon
-
-        cX = int(M["m10"] / M["m00"])
-        cY = int(M["m01"] / M["m00"])
-
-        center_x, center_y = img_size // 2, img_size // 2
-        dx_px = cX - center_x
-        dy_px = cY - center_y 
-
-        meters_per_px = 156543.03392 * math.cos(math.radians(lat)) / (2 ** zoom)
-        shift_x_meters = dx_px * meters_per_px
-        shift_y_meters = -dy_px * meters_per_px
-
-        new_lat = lat + (shift_y_meters / 111320.0)
-        new_lon = lon + (shift_x_meters / (40075000.0 * math.cos(math.radians(lat)) / 360.0))
-
-        return new_lat, new_lon
-
-    def detect_existing_panels(image, roof_mask):
-        model = load_panel_model()
-        img_cv = np.array(image)
-        results = model.predict(img_cv, conf=0.15, verbose=False)
-        final_panel_mask = np.zeros_like(roof_mask)
-        total_panel_pixel_area = 0
-
-        if results[0].masks is not None:
-            masks = results[0].masks.data.cpu().numpy()
-
-            for mask in masks:
-                mask_resized = cv2.resize(mask, (img_cv.shape[1], img_cv.shape[0]))
-                mask_binary = (mask_resized > 0.5).astype(np.uint8) 
-
-                overlap = cv2.bitwise_and(mask_binary, mask_binary, mask=roof_mask)
-
-                overlap_area = cv2.countNonZero(overlap)
-                panel_area = cv2.countNonZero(mask_binary)
-
-                if panel_area > 0 and (overlap_area / panel_area) > 0.3:
-                    final_panel_mask = cv2.bitwise_or(final_panel_mask, overlap)
-                    total_panel_pixel_area += overlap_area
-
-        return final_panel_mask, total_panel_pixel_area
-    # ==========================================
-    # 4. SIDEBAR NAVIGATION
-    # ==========================================
+    # --- NAVIGATION ---
     if "current_page" not in st.session_state:
         st.session_state.current_page = "Zura AI"
-
 
     with st.sidebar:
         st.header("Zura.ai")
@@ -345,7 +347,7 @@ elif st.session_state["authentication_status"] is True:
             logout()
 
     # ==========================================
-    # 5. PAGE 1: ROOFTOP ANALYSER (UPDATED)
+    # 5. PAGE 1: ROOFTOP ANALYSER
     # ==========================================
     if st.session_state.current_page == "Zura AI":
         st.title("Zura AI")
@@ -664,4 +666,3 @@ elif st.session_state["authentication_status"] is True:
     </div>
 
     """, unsafe_allow_html=True)
-
