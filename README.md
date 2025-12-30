@@ -2,7 +2,6 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-red)](https://streamlit.io/)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 A production-ready web application that leverages computer vision and deep learning to automatically detect rooftop structures, identify existing solar panel installations, and estimate solar energy generation potential from satellite imagery.
 
@@ -430,42 +429,11 @@ All sensitive credentials stored in `.streamlit/secrets.toml` (gitignored)
 5. **Panel Orientation**: Assumes optimal tilt angles
 6. **Inverter Losses**: Not modeled separately (included in performance ratio)
 
----
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/enhancement`)
-3. Commit changes (`git commit -m 'Add feature'`)
-4. Push to branch (`git push origin feature/enhancement`)
-5. Open a Pull Request
-
-**Development Setup:**
-```bash
-pip install -r requirements-dev.txt
-pre-commit install
-```
-
----
-
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details
-
----
-
-## Citation
-
-If you use this platform in research, please cite:
-
-```bibtex
-@software{zura_ai_2025,
-  author = {Swayam Sarthak},
-  title = {Zura.ai: AI-Powered Solar Rooftop Analysis Platform},
-  year = {2026},
-  url = {https://github.com/theswayamsarthak/zura-ai}
-}
-```
+**Proprietary & Confidential.**
+Copyright © 2025 Guna Solar Pvt. Ltd. All Rights Reserved.
+Unauthorized copying of this file, via any medium, is strictly prohibited.
 
 ---
 
@@ -475,6 +443,6 @@ If you use this platform in research, please cite:
 - **YOLOv8 Solar Weights**: [finloop](https://huggingface.co/finloop)
 - **Solar Data**: NASA POWER Project
 - **Geospatial APIs**: Google Cloud Platform
-- **Guna Solar Pvt. Ltd.**: Application as an AI Engineer Intern
+- **Guna Solar Pvt. Ltd.**: Application developed during AI Engineer Internship
 
 ---
